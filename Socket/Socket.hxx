@@ -28,6 +28,11 @@ public:
         address = (a << 24) | (b << 16) | (c << 8) | d;
     }
     Address(uint32_t addr, uint16_t port) : address(addr), port(port) { }
+    Address(std::string addr, uint16_t port) : port(port){
+        uint8_t a=0, b=0, c=0, d=0;
+        auto ret = sscanf_s(addr.c_str(), "%hhd.%hhd.%hhd.%hhd", &a, &b, &c, &d);
+        address = (a << 24) | (b << 16) | (c << 8) | d;
+    }
     Address(const Address& A) : address(A.address), port(A.port) { }
 
     uint32_t GetAddress() const { return address; }

@@ -1,19 +1,59 @@
 #include "ModbusTCP.h"
 #include "iostream"
+#include <thread>
 
 void ReceiveResponse(ModbusTCP &);
 bool SendReq(ModbusTCP&, const ModbusTCP::mbFunc func, const uint16_t addr, const uint16_t len);
 
-int main(int argc, char* argv[]) {
+class WaitableTimer
+{
+public:
+
+	WaitableTimer()
+	{
+		m_timer = ::CreateWaitableTimer(NULL, FALSE, NULL);
+		if (!m_timer)
+			throw std::runtime_error("Failed to create waitable time (CreateWaitableTimer), error:" + std::to_string(::GetLastError()));
+	}
+
+	~WaitableTimer()
+	{
+		::CloseHandle(m_timer);
+		m_timer = NULL;
+	}
+
+	void SetAndWait(unsigned relativeTime100Ns)
+	{
+		LARGE_INTEGER dueTime = { 0 };
+		dueTime.QuadPart = static_cast<LONGLONG>(relativeTime100Ns) * -1;
+
+		BOOL res = ::SetWaitableTimer(m_timer, &dueTime, 0, NULL, NULL, FALSE);
+		if (!res)
+			throw std::runtime_error("SetAndWait: failed set waitable time (SetWaitableTimer), error:" + std::to_string(::GetLastError()));
+
+		DWORD waitRes = ::WaitForSingleObject(m_timer, INFINITE);
+		if (waitRes == WAIT_FAILED)
+			throw std::runtime_error("SetAndWait: failed wait for waitable time (WaitForSingleObject)" + std::to_string(::GetLastError()));
+	}
+
+private:
+	HANDLE m_timer;
+};
+
+int main(int argc, char* argv[]) 
+{
+	std::string ip;
+
+	if (argc > 1)
+		ip = argv[1];
+
+	std::cout << ip << std::endl;
+
+	auto addr = Address(ip,502);
 
 	ModbusTCP mbDevice(1);
 
-	mbDevice.debugLevel = 3;
-
-	auto addr = Address(127, 0, 0, 1, 502);
-
-	SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-
+	mbDevice.debugLevel = 0;
 
 	auto ret = mbDevice.connectToDevice(addr);
 	if (ret) {
@@ -21,17 +61,38 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 	
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_COILS, 0, 16))
+	// Проверка типов
+	std::cout << "Type check" << std::endl;
+	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_COILS, 0, 127))
 		ReceiveResponse(mbDevice);
 	
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_BITS, 0, 16))
+	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_BITS, 0, 127))
+		ReceiveResponse(mbDevice);
+	
+	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_REGS, 0, 127))
+		ReceiveResponse(mbDevice);
+	
+	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_REGS, 0, 124))
+		ReceiveResponse(mbDevice);
+	
+	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_EXTRA_REGS, 0, 700))
 		ReceiveResponse(mbDevice);
 
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_REGS, 0, 16))
-		ReceiveResponse(mbDevice);
+	// Тест быстродействия вычитка 
+	std::cout << "Perfomance test (send 500 req)" << std::endl;
+	auto start = time(nullptr);
+	for (int i = 0; i < 500; i++) {
+		if (mbDevice.readDataReq(ModbusTCP::mbFunc::READ_REGS, 0, 127)) {
+			for (int i = 0; i < 10; i++) {
+				std::this_thread::sleep_for(std::chrono::microseconds(10000));
+				auto ret = mbDevice.checkResponse();
+				if (ret > 0)
+					break;
+			}
+		}
+	}
 
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_REGS, 0, 16))
-		ReceiveResponse(mbDevice);
+	std::cout << "time=" << time(nullptr) - start << "s" << std::endl;
 
 	return 0;
 }
@@ -47,10 +108,10 @@ bool SendReq(ModbusTCP& mbDevice, const ModbusTCP::mbFunc func, const uint16_t a
 
 
 void ReceiveResponse(ModbusTCP &mbDevice) {
-	std::cout << "Wait response ";
+	//std::cout << "Wait response ";
 	for (int i = 0; i < 100; i++) {
 		std::cout << "." << std::flush;
-		Sleep(10);
+		std::this_thread::sleep_for(std::chrono::microseconds(10000));
 		auto ret = mbDevice.checkResponse();
 		if (ret>0) {
 			std::string data;
@@ -64,8 +125,9 @@ void ReceiveResponse(ModbusTCP &mbDevice) {
 				<< " errCode=" << static_cast<int>(mbDevice.response.errcode) << "(" << ModbusTCP::mbErrToString(mbDevice.response.errcode) << ")"
 				<< " firstElement=" << mbDevice.response.firstElement
 				<< " countOfElement=" << mbDevice.response.countOfElement
-				<< " Data=" << data
+				<< "\nData=" << data
 				<< std::endl;
+			mbDevice.response.data.clear();
 			break;
 		}
 		if (ret < 0) {

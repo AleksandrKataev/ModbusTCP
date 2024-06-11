@@ -23,7 +23,10 @@ bool ModbusTCP::readDataReq(const mbFunc func, const uint16_t addr, const uint16
 	D2(std::string("readDataReq ") + mbFuncToString(func) + " " + std::to_string(addr) + ":" + std::to_string(len) + "\n");
 
 	// Проверяем что функция выбрана верно
-	if (func != mbFunc::READ_COILS && func != mbFunc::READ_INPUT_BITS && func != mbFunc::READ_REGS && func != mbFunc::READ_INPUT_REGS) {
+	if (func != mbFunc::READ_COILS && func != mbFunc::READ_INPUT_BITS 
+		&& func != mbFunc::READ_REGS && func != mbFunc::READ_INPUT_REGS
+		&& func != mbFunc::READ_EXTRA_REGS)
+	{
 		D1(std::string("Read function ") + std::to_string(static_cast<uint8_t>(func)) + " not supported\n");
 		return false;
 	}
@@ -201,21 +204,23 @@ void ModbusTCP::parseResponse()
 		switch (response.func)
 		{
 		case ModbusTCP::mbFunc::READ_COILS:
-		case ModbusTCP::mbFunc::READ_INPUT_BITS:			
-			data.reserve(numOfByte * 8);
+		case ModbusTCP::mbFunc::READ_INPUT_BITS:
+			data.reserve(response.countOfElement);
 			for (int i = 0; i < response.countOfElement; i++) {
 				data.emplace_back((resp[9+i/8] >> (i % 8)) & 0x1);
 			}
 			break;
 		case ModbusTCP::mbFunc::READ_REGS:
 		case ModbusTCP::mbFunc::READ_INPUT_REGS:
-			data.reserve(numOfByte/2);
+			response.countOfElement = numOfByte / 2;
+			data.reserve(response.countOfElement);
 			for (int i = 0; i < response.countOfElement; i++) {
 				uint16_t val = (static_cast<uint16_t>(resp[9 + i*2])<<8) + resp[10 + i*2];
 				data.emplace_back(val);
 			}
 			break;
 		case ModbusTCP::mbFunc::READ_EXTRA_REGS:
+			response.countOfElement = (messLen - 3) / 2;
 			data.reserve(response.countOfElement / 2);
 			// Копируем данные, в лоб пока не стал, так как возможно понадобится переворачивать байты
 			for (int i = 0; i < response.countOfElement; i++) {
@@ -228,6 +233,7 @@ void ModbusTCP::parseResponse()
 		case ModbusTCP::mbFunc::WRITE_COILS:
 		case ModbusTCP::mbFunc::WRITE_REGS:
 		case ModbusTCP::mbFunc::WRITE_EXTRA_REGS:
+			break;
 		default:
 			response.errcode = errCode::ILLEGAL_FUNCTION;
 			D1("receive unknown function");

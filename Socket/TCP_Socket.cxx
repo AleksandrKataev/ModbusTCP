@@ -296,7 +296,7 @@ int TCP_Socket::Receive()
     if (!isOpen())
         return -1;
 
-    int received_bytes = recv(socket, (char*)buffer.data() + totalSize, static_cast<int>(buffer.size() - totalSize), 0);
+    int received_bytes = recv(socket, (char*)buffer.data() + totalSize, static_cast<int>(buffer.size() - totalSize), NIX(MSG_DONTWAIT)WIN(0));
 
     if (received_bytes > 0) {
         totalSize += received_bytes;

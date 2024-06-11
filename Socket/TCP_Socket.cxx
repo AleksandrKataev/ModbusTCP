@@ -171,17 +171,17 @@ void handlingAcceptLoop(OS_socket_hndl& sock)
     //_tprintf(_T("handlingAcceptLoop closed\n"));
 }
 
-TCP_Socket::TCP_Socket() : Socket(TCP_BUFFER_SIZE)
+TCP_Socket::TCP_Socket()
 {
     socket = OS_SOCKET_INVALID;
 }
 
-TCP_Socket::TCP_Socket(const Address addr) : Socket(TCP_BUFFER_SIZE)
+TCP_Socket::TCP_Socket(const Address addr)
 {
     this->addr = addr;
 }
 
-TCP_Socket::TCP_Socket(const OS_socket_hndl socket, const Address addr) : Socket(TCP_BUFFER_SIZE)
+TCP_Socket::TCP_Socket(const OS_socket_hndl socket, const Address addr)
 {
     this->socket = socket;
     this->addr = addr;

@@ -1,5 +1,6 @@
 #include "ModbusTCP.h"
 #include <iostream>
+#include <array>
 
 int ModbusTCP::connectToDevice(Address addr)
 {
@@ -106,14 +107,14 @@ int ModbusTCP::checkResponse()
 		if (tcpConnect->buffer[2] != 0 || tcpConnect->buffer[3] != 0) {
 			// Какая-то ерунда чистим буфер на всякий. 
 			D1(std::string("Receive incorrect packet"));
-			tcpConnect->buffer.clear();
+			tcpConnect->totalSize = 0;
 		}
 
 		auto messId = (static_cast<uint16_t>(tcpConnect->buffer[0]) << 8) + static_cast<uint16_t>(tcpConnect->buffer[1]);
 		if (messId != lastReqId) {
 			// Идентификатор сообщения сломался, пропускаем сообщение
 			D1(std::string("Message ID is incorrect"));
-			tcpConnect->buffer.clear();
+			tcpConnect->totalSize = 0;
 			return 0;
 		}
 		
@@ -125,7 +126,7 @@ int ModbusTCP::checkResponse()
 			parseResponse();
 
 			// Нескольких сообщений не предполагается, поэтому чистим буфер
-			tcpConnect->buffer.clear();
+			tcpConnect->totalSize = 0;
 			return 1;
 		}
 	}
@@ -210,7 +211,7 @@ void ModbusTCP::parseResponse()
 		case ModbusTCP::mbFunc::READ_INPUT_REGS:
 			data.reserve(numOfByte/2);
 			for (int i = 0; i < response.countOfElement; i++) {
-				auto val = static_cast<uint16_t>(resp[9 + i]) + resp[10 + i];
+				uint16_t val = (static_cast<uint16_t>(resp[9 + i*2])<<8) + resp[10 + i*2];
 				data.emplace_back(val);
 			}
 			break;
@@ -218,7 +219,7 @@ void ModbusTCP::parseResponse()
 			data.reserve(response.countOfElement / 2);
 			// Копируем данные, в лоб пока не стал, так как возможно понадобится переворачивать байты
 			for (int i = 0; i < response.countOfElement; i++) {
-				auto val = static_cast<uint16_t>(resp[9 + i]) + resp[10 + i];
+				uint16_t val = (static_cast<uint16_t>(resp[9 + i*2]) << 8) + resp[10 + i*2];
 				data.emplace_back(val);
 			}
 			break;
@@ -249,10 +250,11 @@ void ModbusTCP::D2(const std::string text)
 }
 
 // Данные
-void ModbusTCP::D3(const std::string text, const std::vector<uint8_t> data, int realLength)
+template<typename container>
+void ModbusTCP::D3(const std::string text, const container& data, size_t realLength)
 {
 	if (debugLevel >= 3) {
-		auto sz = realLength ? realLength : data.size();
+		size_t sz = realLength ? realLength : data.size();
 
 		std::cout << text << "(" << sz << "): ";
 		for (int i = 0; i < realLength && i < 100; i++) {

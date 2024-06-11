@@ -51,7 +51,7 @@ const uint16_t SOCKET_SEND_BUFFER_MAX_SIZE = 65507; // SO_MAX_MSG_SIZE
 
 class Socket {
 public:
-    Socket(uint32_t max_rec_size);
+    Socket();
 
     ~Socket();
 
@@ -72,9 +72,10 @@ public:
     Address addr = Address();
 
     // буфер для накопления данных
-    //std::array<uint8_t, SOCKET_SEND_BUFFER_MAX_SIZE> buffer;
+    std::array<uint8_t, SOCKET_SEND_BUFFER_MAX_SIZE> buffer;
     // Не нашел причины делать буфер диамическим
-    std::vector<uint8_t> buffer;
+    // Если делать через буфер, то нужно как-то не давать пользователю его обнулять
+    //std::vector<uint8_t> buffer;
 
     // начало куда писать новые данные
     //uint16_t bufOffset = 0; // по идее не нужен, должно хватить totalSize

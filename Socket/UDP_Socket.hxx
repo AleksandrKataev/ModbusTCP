@@ -10,8 +10,6 @@
 #include <fcntl.h>
 #endif
 
-const uint32_t UDP_BUFFER_SIZE = 0x0FFFF;
-
 class UDP_Socket : public Socket
 {
 public:

@@ -83,6 +83,7 @@
 		// ќталадка второго уровн€ (сообщени€ об событи€х)
 		void D2(const std::string);
 		// ќталадка третьего уровн€ (сообщени€ с данными)
-		void D3(const std::string text, const std::vector<uint8_t> data, int realLength = 0);
+		template<typename container>
+		void D3(const std::string text, const container& data, size_t realLength = 0);
 
 	};

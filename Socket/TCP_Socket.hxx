@@ -11,8 +11,6 @@
 #include <list>
 #include <mutex>
 
-const uint16_t TCP_BUFFER_SIZE = 0xFFFF;
-
 class TCP_Socket : public Socket
 {
 public:

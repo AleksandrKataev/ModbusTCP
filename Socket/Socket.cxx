@@ -36,7 +36,7 @@ inline bool InitializeSockets()
 #endif
 }
 
-Socket::Socket(uint32_t max_rec_size) : buffer(max_rec_size) {
+Socket::Socket() : buffer{ 0 } {
     if (socketNum == 0)
         if (!InitializeSockets())
             return;

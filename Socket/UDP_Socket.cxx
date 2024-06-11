@@ -1,7 +1,7 @@
 #include "UDP_Socket.hxx"
 #include <thread>
 
-UDP_Socket::UDP_Socket() : Socket(UDP_BUFFER_SIZE) {
+UDP_Socket::UDP_Socket() {
 }
 
 UDP_Socket::~UDP_Socket() {

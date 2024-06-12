@@ -4,6 +4,7 @@
 
 void ReceiveResponse(ModbusTCP &);
 bool SendReq(ModbusTCP&, const ModbusTCP::mbFunc func, const uint16_t addr, const uint16_t len);
+bool SendWReq(ModbusTCP&, const ModbusTCP::mbFunc func, const uint16_t addr, const uint16_t len, const std::vector<uint16_t>& data);
 
 class WaitableTimer
 {
@@ -42,18 +43,16 @@ private:
 
 int main(int argc, char* argv[]) 
 {
-	std::string ip;
+	std::string ip = "127.0.0.1";
 
 	if (argc > 1)
 		ip = argv[1];
-
-	std::cout << ip << std::endl;
 
 	auto addr = Address(ip,502);
 
 	ModbusTCP mbDevice(1);
 
-	mbDevice.debugLevel = 0;
+	mbDevice.debugLevel = 3;
 
 	auto ret = mbDevice.connectToDevice(addr);
 	if (ret) {
@@ -62,39 +61,86 @@ int main(int argc, char* argv[])
 	}
 	
 	// Проверка типов
-	std::cout << "Type check" << std::endl;
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_COILS, 0, 127))
+	//std::cout << "Type check" << std::endl;
+	//if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_COILS, 0, 127))
+	//	ReceiveResponse(mbDevice);
+	//
+	//if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_BITS, 0, 127))
+	//	ReceiveResponse(mbDevice);
+	//
+	//if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_REGS, 0, 123))
+	//	ReceiveResponse(mbDevice);
+	//
+	//if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_REGS, 0, 123))
+	//	ReceiveResponse(mbDevice);
+	//
+	//if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_EXTRA_REGS, 0, 700))
+	//	ReceiveResponse(mbDevice);
+
+	// Тест на запись
+	std::cout << "Write check" << std::endl;
+	std::vector<uint16_t> data;// = { 1,1,1,0,0,0,2,3,4,5 };
+	for (int i = 0; i < 2000; i++)
+		data.push_back(i);
+
+	if (SendWReq(mbDevice, ModbusTCP::mbFunc::WRITE_COIL, 0, 1, data))
 		ReceiveResponse(mbDevice);
-	
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_BITS, 0, 127))
+
+	if (SendWReq(mbDevice, ModbusTCP::mbFunc::WRITE_COILS, 10, 2000, data))
 		ReceiveResponse(mbDevice);
-	
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_REGS, 0, 127))
+
+	if (SendWReq(mbDevice, ModbusTCP::mbFunc::WRITE_REG, 0, 1, data))
 		ReceiveResponse(mbDevice);
-	
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_REGS, 0, 124))
+
+	if (SendWReq(mbDevice, ModbusTCP::mbFunc::WRITE_REGS, 10, 200, data))
 		ReceiveResponse(mbDevice);
-	
-	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_EXTRA_REGS, 0, 700))
+
+	if (SendWReq(mbDevice, ModbusTCP::mbFunc::WRITE_EXTRA_REGS, 0, 10, data))
 		ReceiveResponse(mbDevice);
 
 	// Тест быстродействия вычитка 
-	std::cout << "Perfomance test (send 500 req)" << std::endl;
-	auto start = time(nullptr);
-	for (int i = 0; i < 500; i++) {
-		if (mbDevice.readDataReq(ModbusTCP::mbFunc::READ_REGS, 0, 127)) {
-			for (int i = 0; i < 10; i++) {
-				std::this_thread::sleep_for(std::chrono::microseconds(10000));
-				auto ret = mbDevice.checkResponse();
-				if (ret > 0)
-					break;
-			}
-		}
-	}
-
-	std::cout << "time=" << time(nullptr) - start << "s" << std::endl;
+	//std::cout << "Perfomance test (send 500 req READ_REGS)" << std::endl;
+	//auto start = time(nullptr);
+	//for (int i = 0; i < 500; i++) {
+	//	if (mbDevice.readDataReq(ModbusTCP::mbFunc::READ_REGS, 0, 127)) {
+	//		while (mbDevice.checkResponse() == 0);
+	//		//for (int i = 0; i < 10; i++) {
+	//		//	std::this_thread::sleep_for(std::chrono::microseconds(5000));
+	//		//	auto ret = mbDevice.checkResponse();
+	//		//	if (ret > 0)
+	//		//		break;
+	//		//}
+	//	}
+	//}
+	//auto end = time(nullptr);
+	//std::cout << "time=" << end - start << "s, speed ~ " << 127*500/(end - start) << " words/s" << std::endl;
+	//
+	//std::cout << "Perfomance test (send 500 req READ_EXTRA_REGS)" << std::endl;
+	//start = time(nullptr);
+	//for (int i = 0; i < 500; i++) {
+	//	if (mbDevice.readDataReq(ModbusTCP::mbFunc::READ_EXTRA_REGS, 0, 719)) {
+	//		while (mbDevice.checkResponse() == 0);
+	//		//for (int i = 0; i < 10; i++) {
+	//		//	std::this_thread::sleep_for(std::chrono::microseconds(5000));
+	//		//	auto ret = mbDevice.checkResponse();
+	//		//	if (ret > 0)
+	//		//		break;
+	//		//}
+	//	}
+	//}
+	//end = time(nullptr);
+	//std::cout << "time=" << end - start << "s, speed ~ " << (719 * 500) / (end - start) << " words/s" << std::endl;
 
 	return 0;
+}
+
+bool SendWReq(ModbusTCP& mbDevice, const ModbusTCP::mbFunc func, const uint16_t addr, const uint16_t len, const std::vector<uint16_t> &data) {
+	std::cout << "\nSend write request " << ModbusTCP::mbFuncToString(func) << " " << addr << ":" << len << std::endl;
+	if (!mbDevice.writeDataReq(func, addr, len, data)) {
+		std::cout << "readDataReq return err" << std::endl;
+		return false;
+	}
+	return true;
 }
 
 bool SendReq(ModbusTCP& mbDevice, const ModbusTCP::mbFunc func, const uint16_t addr, const uint16_t len) {
@@ -105,7 +151,6 @@ bool SendReq(ModbusTCP& mbDevice, const ModbusTCP::mbFunc func, const uint16_t a
 	}
 	return true;
 }
-
 
 void ReceiveResponse(ModbusTCP &mbDevice) {
 	//std::cout << "Wait response ";

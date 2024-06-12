@@ -66,7 +66,7 @@
 		TCP_Socket *tcpConnect;
 
 		// Подготовить запрос
-		std::vector<uint8_t> getReq(const mbFunc func, const uint16_t addr, const uint16_t len);
+		std::vector<uint8_t> getReq(const mbFunc func, const uint16_t addr, uint16_t len);
 
 		// Адрес устройства
 		uint8_t devAddr = 1;

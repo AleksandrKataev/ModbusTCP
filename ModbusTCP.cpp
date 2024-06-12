@@ -53,6 +53,8 @@ bool ModbusTCP::writeDataReq(const mbFunc func, const uint16_t addr, const uint1
 
 	std::vector<uint8_t> pack = getReq(func, addr, len);
 
+	int limit = 0; // Ограничитель
+
 	switch (func)
 	{
 	case ModbusTCP::mbFunc::WRITE_COIL:
@@ -64,13 +66,17 @@ bool ModbusTCP::writeDataReq(const mbFunc func, const uint16_t addr, const uint1
 		pack.push_back(static_cast<uint8_t>(data[0]));
 		break;
 	case ModbusTCP::mbFunc::WRITE_COILS: {
+		limit = 1968;
 		int n = 0;
 		uint8_t byte = 0;
 		for (auto d : data) {
 			if (d)
 				byte += 1 << n;
 
-			if (++n > 8) {
+			if (--limit == 0)
+				break;
+
+			if (++n >= 8) {
 				pack.push_back(byte);
 				byte = 0;
 				n = 0;
@@ -79,10 +85,15 @@ bool ModbusTCP::writeDataReq(const mbFunc func, const uint16_t addr, const uint1
 		pack.push_back(byte);
 		break;
 	}
+	case ModbusTCP::mbFunc::WRITE_EXTRA_REGS:
+		limit = 719-123;
 	case ModbusTCP::mbFunc::WRITE_REGS:
+		limit += 123;
 		for (auto d : data) {
 			pack.push_back(static_cast<uint8_t>(d >> 8));
 			pack.push_back(static_cast<uint8_t>(d));
+			if (--limit == 0)
+				break;
 		}
 		break;
 	default:
@@ -136,19 +147,36 @@ int ModbusTCP::checkResponse()
 	return 0;
 }
 
-std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, const uint16_t len)
+std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, uint16_t len)
 {
 	std::vector<uint8_t> data;
 
 	struct {
 		uint16_t id = 0;		//Transaction identifier
 		uint16_t zero = 0;		//Protocol Identifier
-		uint16_t messLen = htons((uint16_t)6);	// Message length
+		uint16_t messLen = 6;	// Message length
 		uint8_t devAddr = 0;	// Unit Identifier
 		uint8_t fc = 0;			// Function Code
 		uint16_t daddr = 0;		// Data Address of the first register
 		uint16_t dlen = 0;		// The total number of registers
 	} request;
+
+	// Ограничители длины
+	switch (func)
+	{
+	case ModbusTCP::mbFunc::WRITE_COILS:
+		if (len > 1968)
+			len = 1968;
+		break;
+	case ModbusTCP::mbFunc::WRITE_REGS:
+		if (len > 123)
+			len = 123;
+		break;
+	case ModbusTCP::mbFunc::WRITE_EXTRA_REGS:
+		if (len > 719)
+			len = 719;
+		break;
+	}
 
 	request.id = htons(getNewReqID());
 	request.devAddr = devAddr;
@@ -160,7 +188,7 @@ std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, c
 	{
 	case ModbusTCP::mbFunc::WRITE_COIL:
 	case ModbusTCP::mbFunc::WRITE_REG:
-		request.messLen += 2;
+		//request.messLen += 2; В одиночной записи нет длины
 		break;
 	case ModbusTCP::mbFunc::WRITE_COILS:
 		request.messLen += 1/*num of bytes*/ + (len + 7) / 8;
@@ -171,11 +199,18 @@ std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, c
 	default:
 		break;
 	}
+	auto mesLen = request.messLen;
+	request.messLen = htons(mesLen);
 
 	std::copy(reinterpret_cast<uint8_t*>(&request), reinterpret_cast<uint8_t*>(&request) + sizeof(request), std::back_inserter(data));
 
-	if (func == ModbusTCP::mbFunc::WRITE_COILS || func == ModbusTCP::mbFunc::WRITE_REGS)
-		data.push_back(request.messLen-3);
+	if (func == ModbusTCP::mbFunc::WRITE_COIL || func == ModbusTCP::mbFunc::WRITE_REG) {
+		// Выкидываем длину
+		data.pop_back(); data.pop_back();
+	}	
+
+	if (func == ModbusTCP::mbFunc::WRITE_COILS || func == ModbusTCP::mbFunc::WRITE_REGS || func == ModbusTCP::mbFunc::WRITE_EXTRA_REGS)
+		data.push_back(static_cast<uint8_t>(mesLen-7));
 
 	// Сразу запоминаем начало и размер данных для ответа
 	response.firstElement = addr;
@@ -263,7 +298,7 @@ void ModbusTCP::D3(const std::string text, const container& data, size_t realLen
 		size_t sz = realLength ? realLength : data.size();
 
 		std::cout << text << "(" << sz << "): ";
-		for (int i = 0; i < realLength && i < 100; i++) {
+		for (int i = 0; i < sz && i < 100; i++) {
 			std::cout << std::hex << (int)data[i] << " ";
 			if (i == 99)
 				std::cout << "...";

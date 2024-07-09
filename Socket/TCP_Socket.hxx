@@ -21,7 +21,7 @@ public:
 	TCP_Socket(const OS_socket_hndl, const Address);
 	~TCP_Socket();
 
-	virtual int Receive()  final;
+	virtual int Receive(uint32_t timeout = 1000)  final;
 	virtual bool Send(const void* data, size_t size) final;
 
 	// Открываем порт TCP
@@ -37,7 +37,8 @@ public:
 	static std::list<TCP_Socket> tcpConnections;
 
 	// Добавить активное подключение в общий список
-	static TCP_Socket* connectTo(Address);
+	// blockMode - блокирующий режим (позволяет получить ответ без задержек)
+	static TCP_Socket* connectTo(Address, bool blockMode = false);
 
 private:
 	std::thread AcceptLoopThread;

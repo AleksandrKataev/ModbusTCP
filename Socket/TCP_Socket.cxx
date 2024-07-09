@@ -1,5 +1,6 @@
 #include "TCP_Socket.hxx"
 #include <climits>
+//#include <iostream>
 
 #ifdef _WIN32
     // link with Ws2_32.lib
@@ -157,7 +158,7 @@ void handlingAcceptLoop(OS_socket_hndl& sock)
             //_tprintf(_T("accept addr  = %s:%hu\n"), addr.GetAddressWString().c_str(), port);
 
             //в неблокирующий режим 
-            unsigned long block = 1;
+            WIN(unsigned long block = 1;)
             WIN(ioctlsocket(client_socket, FIONBIO, &block);)   // На линуксе не завелось
             NIX(const int flags = fcntl(client_socket, F_GETFL, 0);
             fcntl(client_socket, F_SETFL, flags | O_NONBLOCK);)
@@ -237,7 +238,7 @@ bool TCP_Socket::Open(uint16_t port)
 	return true;
 }
 
-TCP_Socket* TCP_Socket::connectTo(Address addr)
+TCP_Socket* TCP_Socket::connectTo(Address addr, bool block)
 {
     SocketAddr_in address;
     TCP_Socket* tcpCon = nullptr;
@@ -283,34 +284,67 @@ TCP_Socket* TCP_Socket::connectTo(Address addr)
     }
     
     // в неблокирующий режим 
-    WIN(unsigned long block = 1;
-        ioctlsocket(tcpCon->socket, FIONBIO, &block));  // На линуксе не компилируется
-    NIX(const int flags = fcntl(tcpCon->socket, F_GETFL, 0);
-        fcntl(tcpCon->socket, F_SETFL, flags | O_NONBLOCK));
+	if (!block) {
+		WIN(unsigned long block = 1;
+		ioctlsocket(tcpCon->socket, FIONBIO, &block));  // На линуксе не компилируется
+		NIX(const int flags = fcntl(tcpCon->socket, F_GETFL, 0);
+		fcntl(tcpCon->socket, F_SETFL, flags | O_NONBLOCK));
+	}
+	tcpCon->blockMode = block;
 
     return tcpCon;
 }
 
-int TCP_Socket::Receive()
+int TCP_Socket::Receive(uint32_t timeout)
 {
-    if (!isOpen())
-        return -1;
+	if (!isOpen())
+		return -1;
 
-    int received_bytes = recv(socket, (char*)buffer.data() + totalSize, static_cast<int>(buffer.size() - totalSize), NIX(MSG_DONTWAIT)WIN(0));
+    int flag = NIX(MSG_DONTWAIT)WIN(0);
+
+	if (blockMode) {
+		WIN(
+			DWORD tm = timeout;
+			setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (char*)&tm, sizeof(tm));
+		);
+
+		NIX(
+            flag = 0;
+            //timeout
+			struct timeval tm;
+			tm.tv_sec = timeout/1000;
+			tm.tv_usec = (timeout%1000)*1000;
+			setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &tm, sizeof(tm));
+		)
+	}
+    
+    int received_bytes = recv(socket, (char*)buffer.data() + totalSize, static_cast<int>(buffer.size() - totalSize), flag);
 
     if (received_bytes > 0) {
         totalSize += received_bytes;
     }
 
+	// Если recv возвращает 0, значит связь потеряна. По крайней мере для блокирующего режима Windows
+	if (received_bytes == 0) {
+		Close();
+		return -1;
+	}
+
     #ifdef _WIN32
-    // WSAEWOULDBLOCK означает данных нет, не критично
-    if (received_bytes == SOCKET_ERROR)
-        if (WSAGetLastError() == WSAEWOULDBLOCK)
-            received_bytes = 0;
+	if (received_bytes == SOCKET_ERROR) {
+		if (WSAGetLastError() == WSAEWOULDBLOCK) // WSAEWOULDBLOCK означает данных нет, не критично
+			received_bytes = 0;
+		if (WSAGetLastError() == WSAETIMEDOUT)
+			received_bytes = -2;
+	}
     #else
     if (received_bytes == SOCKET_ERROR)
-        if (errno == EAGAIN)
-            received_bytes = 0;
+        if (errno == EAGAIN){
+            if (blockMode)     // В блокирующем режиме это таймаут
+                received_bytes = -2;
+            else
+                received_bytes = 0;
+        }
     #endif
 
     // Возвращаем только длину новых данных, чтобы сообщить что пришло что-то новое
@@ -324,7 +358,7 @@ bool TCP_Socket::Send(const void* data, size_t size)
     if (size > INT_MAX)
         return false;
     // Отправить сообщение
-    int sendlen = send(socket, reinterpret_cast<const char*>(data), static_cast<int>(size), 0);
+    size_t sendlen = send(socket, reinterpret_cast<const char*>(data), static_cast<int>(size), 0);
     if (sendlen != size ) return false;
     return true;
 }

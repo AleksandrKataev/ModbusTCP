@@ -1,28 +1,46 @@
 #include "ModbusTCP.h"
 #include <iostream>
 #include <array>
+#include <thread>
+
+//using namespace std::literals::chrono_literals; РЅР° СЃ++11 РЅРµ СЂР°Р±РѕС‚Р°РµС‚
 
 int ModbusTCP::connectToDevice(Address addr)
 {
 	D2(std::string("connectToDevice ") + addr.GetAddressString() + "\n");
 	
-	tcpConnect = TCP_Socket::connectTo(addr);
+	tcpConnect = TCP_Socket::connectTo(addr,true);
 	if (!tcpConnect) {
 		D1(std::string("Connection fault ") + addr.GetAddressString() + "\n");
 		return -1;
 	}
 
-	// Обнуляем счетчик сообщений
+	// РћР±РЅСѓР»СЏРµРј СЃС‡РµС‚С‡РёРє СЃРѕРѕР±С‰РµРЅРёР№
 	lastReqId = 0;
 
 	return 0;
 }
 
-bool ModbusTCP::readDataReq(const mbFunc func, const uint16_t addr, const uint16_t len)
+// РћС‚РєР»СЋС‡РµРЅРёРµ (РїСЂРё РІС‹С…РѕРґРµ РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ)
+int ModbusTCP::disconnect() 
+{
+	//reqMutex.unlock();	
+	waitResponse = false; // РќР° РІСЃСЏРєРёР№ СЃР»СѓС‡Р°Р№ РІРѕР·РІСЂР°С‰Р°РµРј СѓРїСЂР°РІР»РµРЅРёРµ
+
+	if (!isConnected())
+		return 0;
+	
+	if (tcpConnect->Close())
+		return 0;
+
+	return -1;
+}
+
+bool ModbusTCP::readDataReq(const mbFunc func, const uint8_t devAddr, const uint16_t addr, const uint16_t len)
 {
 	D2(std::string("readDataReq ") + mbFuncToString(func) + " " + std::to_string(addr) + ":" + std::to_string(len) + "\n");
 
-	// Проверяем что функция выбрана верно
+	// РџСЂРѕРІРµСЂСЏРµРј С‡С‚Рѕ С„СѓРЅРєС†РёСЏ РІС‹Р±СЂР°РЅР° РІРµСЂРЅРѕ
 	if (func != mbFunc::READ_COILS && func != mbFunc::READ_INPUT_BITS 
 		&& func != mbFunc::READ_REGS && func != mbFunc::READ_INPUT_REGS
 		&& func != mbFunc::READ_EXTRA_REGS)
@@ -31,29 +49,55 @@ bool ModbusTCP::readDataReq(const mbFunc func, const uint16_t addr, const uint16
 		return false;
 	}
 
-	auto req = getReq(func, addr, len);
-
-	D3("ReadReq", req);
-
-	if (tcpConnect)
-		return tcpConnect->Send(req.data(), req.size());
-
-	D1("Error! Connection not possible");
-	return false;
-}
-
-bool ModbusTCP::writeDataReq(const mbFunc func, const uint16_t addr, const uint16_t len, const std::vector<uint16_t> data)
-{
-	D2(std::string("writeDataReq ") + mbFuncToString(func) + " " + std::to_string(addr) + ":" + std::to_string(len) + "\n");
-
-	if (data.empty()) {
-		D1(std::string("writeDataReq error. Data is empty"));
+	if (!tcpConnect) {
+		D1("Error! Connection not possible");
 		return false;
 	}
 
-	std::vector<uint8_t> pack = getReq(func, addr, len);
+	//startWatchDog();
+	std::lock_guard<std::mutex> lock(wrMutex);
+	while (waitResponse) 
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	reqTime = std::chrono::system_clock::now();
+	waitResponse = true;
+	auto req = getReq(func, devAddr, addr, len);
 
-	int limit = 0; // Ограничитель
+	D3("ReadReq", req);
+
+	auto ok = tcpConnect->Send(req.data(), req.size());
+
+	// Р’ СЃР»СѓС‡Р°Рµ РЅРµСѓРґР°С‡Рё РѕСЃРІРѕР±РѕР¶РґР°РµРј СЂРµСЃСѓСЂСЃ РґР»СЏ СЃР»РµРґСѓСЋС‰РµРіРѕ Р·Р°РїСЂРѕСЃР° СЃСЂР°Р·Сѓ
+	if (!ok) {
+		//reqMutex.unlock();
+		waitResponse = false;
+	}
+
+	return ok;
+}
+
+bool ModbusTCP::writeDataReq(const mbFunc func, const uint8_t devAddr, const uint16_t addr, /*const uint16_t len,*/ const std::vector<uint16_t> data)
+{
+	D2(std::string("writeDataReq ") + mbFuncToString(func) + " " + std::to_string(addr) + ":" + std::to_string(data.size()) + "\n");
+
+	if (data.empty() || data.size() >= UINT16_MAX) {
+		D1(std::string("writeDataReq error. Incorrect data length"));
+		return false;
+	}
+
+	if (!tcpConnect) {
+		D1("Error! Connection not possible");
+		return false;
+	}
+
+	//startWatchDog();
+	std::lock_guard<std::mutex> lock(wrMutex);
+	while (waitResponse)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	reqTime = std::chrono::system_clock::now();
+	waitResponse = true;
+	std::vector<uint8_t> pack = getReq(func, devAddr, addr, static_cast<uint16_t>(data.size()));
+
+	int limit = 0; // РћРіСЂР°РЅРёС‡РёС‚РµР»СЊ
 
 	switch (func)
 	{
@@ -66,7 +110,7 @@ bool ModbusTCP::writeDataReq(const mbFunc func, const uint16_t addr, const uint1
 		pack.push_back(static_cast<uint8_t>(data[0]));
 		break;
 	case ModbusTCP::mbFunc::WRITE_COILS: {
-		limit = 1968;
+		limit = COILS_LIMIT;
 		int n = 0;
 		uint8_t byte = 0;
 		for (auto d : data) {
@@ -86,9 +130,9 @@ bool ModbusTCP::writeDataReq(const mbFunc func, const uint16_t addr, const uint1
 		break;
 	}
 	case ModbusTCP::mbFunc::WRITE_EXTRA_REGS:
-		limit = 719-123;
+		limit = REGS_EX_LIMIT-REGS_LIMIT;
 	case ModbusTCP::mbFunc::WRITE_REGS:
-		limit += 123;
+		limit += REGS_LIMIT;
 		for (auto d : data) {
 			pack.push_back(static_cast<uint8_t>(d >> 8));
 			pack.push_back(static_cast<uint8_t>(d));
@@ -102,44 +146,75 @@ bool ModbusTCP::writeDataReq(const mbFunc func, const uint16_t addr, const uint1
 	}
 
 	D3("WriteReq", pack);
-	if (tcpConnect) 
-		return tcpConnect->Send(pack.data(), pack.size());
+	 
+	auto ok = tcpConnect->Send(pack.data(), pack.size());
 
-	D1("Error! Connection not possible");
-	return false;
+	// Р’ СЃР»СѓС‡Р°Рµ РЅРµСѓРґР°С‡Рё РѕСЃРІРѕР±РѕР¶РґР°РµРј СЂРµСЃСѓСЂСЃ РґР»СЏ СЃР»РµРґСѓСЋС‰РµРіРѕ Р·Р°РїСЂРѕСЃР° СЃСЂР°Р·Сѓ
+	if (!ok) {
+		//reqMutex.unlock();
+		waitResponse = false;
+	}
+
+	return ok;
 }
 
-int ModbusTCP::checkResponse()
+int ModbusTCP::getResponse(mbResponse &response)
 {
-	auto dataLen = tcpConnect->Receive();
+	// РџСЂРѕРІРµСЂРєР° С‚Р°Р№РјР°СѓС‚Р°
+	//if (waitResponse) {
+	//	auto curTime = std::chrono::system_clock::now();
+	//	if (std::chrono::duration_cast<std::chrono::milliseconds>(curTime - reqTime).count() >= timeout) {
+	//		D1("Request timeout\n");
+	//		waitResponse = false;
+	//		response.errcode = errCode::TIMEOUT;
+	//		return 2;
+	//	}
+	//}
+	response = lastReq;
+	
+	auto dataLen = tcpConnect->Receive(timeout);
 	if (dataLen < 0) {
-		D1(std::string("Data receive error. \n"));
-		tcpConnect->Close();
-		return -1;
+		if (dataLen == -2) {
+			D1("Request timeout\n");
+			waitResponse = false;
+			response.errcode = errCode::TIMEOUT;
+			return 2;
+		}
+		else {
+			D1(std::string("Data receive error ") + std::to_string(dataLen) + "\n");
+			tcpConnect->Close();
+			return -1;
+		}
 	}
-	if (dataLen >= 0 && tcpConnect->totalSize>6) {	// 6 минимальный размер пакета
+	if (dataLen >= 0 && tcpConnect->totalSize>6) {	// 6 РјРёРЅРёРјР°Р»СЊРЅС‹Р№ СЂР°Р·РјРµСЂ РїР°РєРµС‚Р°
 		if (tcpConnect->buffer[2] != 0 || tcpConnect->buffer[3] != 0) {
-			// Какая-то ерунда чистим буфер на всякий. 
+			// РљР°РєР°СЏ-С‚Рѕ РµСЂСѓРЅРґР° С‡РёСЃС‚РёРј Р±СѓС„РµСЂ РЅР° РІСЃСЏРєРёР№. 
 			D1(std::string("Receive incorrect packet"));
 			tcpConnect->totalSize = 0;
 		}
 
 		auto messId = (static_cast<uint16_t>(tcpConnect->buffer[0]) << 8) + static_cast<uint16_t>(tcpConnect->buffer[1]);
 		if (messId != lastReqId) {
-			// Идентификатор сообщения сломался, пропускаем сообщение
+			// РРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ СЃРѕРѕР±С‰РµРЅРёСЏ СЃР»РѕРјР°Р»СЃСЏ, РїСЂРѕРїСѓСЃРєР°РµРј СЃРѕРѕР±С‰РµРЅРёРµ
 			D1(std::string("Message ID is incorrect"));
 			tcpConnect->totalSize = 0;
 			return 0;
 		}
 		
 		uint16_t messLen = (static_cast<uint16_t>(tcpConnect->buffer[4]) << 8) + static_cast<uint16_t>(tcpConnect->buffer[5]);
-		if (tcpConnect->totalSize >= (6 + messLen)) { // Нужное количестов данных пришло
-			
+		if (tcpConnect->totalSize >= (6 + messLen)) // РќСѓР¶РЅРѕРµ РєРѕР»РёС‡РµСЃС‚РѕРІ РґР°РЅРЅС‹С… РїСЂРёС€Р»Рѕ
+		{ 
+			// Р Р°Р·СЂРµС€Р°РµРј СЃР»РµРґСѓСЋС‰РёР№ Р·Р°РїСЂРѕСЃ
+			//reqMutex.unlock();
+
 			D3("Receive data", tcpConnect->buffer, 6 + messLen);
 
-			parseResponse();
+			// Р’Р°Р¶РЅРѕ РїРѕР»СѓС‡РёС‚СЊ РѕС‚РІРµС‚ РґРѕ СЃР±СЂРѕСЃР° waitResponse РёРЅР°С‡Рµ РЅРѕРІС‹Р№ Р·Р°РїСЂРѕСЃ РїРѕРґРјРµРЅСЏРµС‚ Р°РґСЂРµСЃ Рё РєРѕР»РёС‡РµСЃС‚РІРѕ Р·Р°РїСЂРѕС€РµРЅРЅС‹С… РґР°РЅРЅС‹С…
+			response = parseResponse();
+			if (response.func>mbFunc::UNKNOWN)
+				waitResponse = false;
 
-			// Нескольких сообщений не предполагается, поэтому чистим буфер
+			// РќРµСЃРєРѕР»СЊРєРёС… СЃРѕРѕР±С‰РµРЅРёР№ РЅРµ РїСЂРµРґРїРѕР»Р°РіР°РµС‚СЃСЏ, РїРѕСЌС‚РѕРјСѓ С‡РёСЃС‚РёРј Р±СѓС„РµСЂ
 			tcpConnect->totalSize = 0;
 			return 1;
 		}
@@ -147,7 +222,14 @@ int ModbusTCP::checkResponse()
 	return 0;
 }
 
-std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, uint16_t len)
+// РџСЂРѕРІРµСЂРєР° СЃРІСЏР·Рё
+bool ModbusTCP::isConnected() const {
+	if (tcpConnect == nullptr)
+		return false;
+	return tcpConnect->isOpen();
+};
+
+std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint8_t devAddr, const uint16_t addr, uint16_t len)
 {
 	std::vector<uint8_t> data;
 
@@ -161,20 +243,22 @@ std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, u
 		uint16_t dlen = 0;		// The total number of registers
 	} request;
 
-	// Ограничители длины
+	// РћРіСЂР°РЅРёС‡РёС‚РµР»Рё РґР»РёРЅС‹
 	switch (func)
 	{
 	case ModbusTCP::mbFunc::WRITE_COILS:
-		if (len > 1968)
-			len = 1968;
+		if (len > COILS_LIMIT)
+			len = COILS_LIMIT;
 		break;
 	case ModbusTCP::mbFunc::WRITE_REGS:
-		if (len > 123)
-			len = 123;
+		if (len > REGS_LIMIT)
+			len = REGS_LIMIT;
 		break;
 	case ModbusTCP::mbFunc::WRITE_EXTRA_REGS:
-		if (len > 719)
-			len = 719;
+		if (len > REGS_EX_LIMIT)
+			len = REGS_EX_LIMIT;
+		break;
+	default:
 		break;
 	}
 
@@ -188,7 +272,7 @@ std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, u
 	{
 	case ModbusTCP::mbFunc::WRITE_COIL:
 	case ModbusTCP::mbFunc::WRITE_REG:
-		//request.messLen += 2; В одиночной записи нет длины
+		//request.messLen += 2; Р’ РѕРґРёРЅРѕС‡РЅРѕР№ Р·Р°РїРёСЃРё РЅРµС‚ РґР»РёРЅС‹
 		break;
 	case ModbusTCP::mbFunc::WRITE_COILS:
 		request.messLen += 1/*num of bytes*/ + (len + 7) / 8;
@@ -205,27 +289,32 @@ std::vector<uint8_t> ModbusTCP::getReq(const mbFunc func, const uint16_t addr, u
 	std::copy(reinterpret_cast<uint8_t*>(&request), reinterpret_cast<uint8_t*>(&request) + sizeof(request), std::back_inserter(data));
 
 	if (func == ModbusTCP::mbFunc::WRITE_COIL || func == ModbusTCP::mbFunc::WRITE_REG) {
-		// Выкидываем длину
+		// Р’С‹РєРёРґС‹РІР°РµРј РґР»РёРЅСѓ
 		data.pop_back(); data.pop_back();
 	}	
 
 	if (func == ModbusTCP::mbFunc::WRITE_COILS || func == ModbusTCP::mbFunc::WRITE_REGS || func == ModbusTCP::mbFunc::WRITE_EXTRA_REGS)
 		data.push_back(static_cast<uint8_t>(mesLen-7));
 
-	// Сразу запоминаем начало и размер данных для ответа
-	response.firstElement = addr;
-	response.countOfElement = len;
+	// РЎСЂР°Р·Сѓ Р·Р°РїРѕРјРёРЅР°РµРј С‡С‚Рѕ Р·Р°РїСЂР°С€РёРІР°Р»Рё
+	lastReq.device = devAddr;
+	lastReq.func = func;
+	lastReq.firstElement = addr;
+	lastReq.countOfElement = len;
+	lastReq.errcode = errCode::NO_ERR;
+	lastReq.data.clear();
 
 	return data;
 }
 
-void ModbusTCP::parseResponse()
+ModbusTCP::mbResponse ModbusTCP::parseResponse()
 {
+	mbResponse response = lastReq;
 	auto& resp = tcpConnect->buffer;
 	uint16_t messLen = (static_cast<uint16_t>(resp[4]) << 8) + static_cast<uint16_t>(resp[5]);
 	response.device = resp[6];
 	response.func = static_cast<mbFunc>(resp[7]&0x7F);
-	// Проверяем ошибку
+	// РџСЂРѕРІРµСЂСЏРµРј РѕС€РёР±РєСѓ
 	if (resp[7] & 0x80) {
 		response.errcode = static_cast<errCode>(resp[8]);
 	}
@@ -257,7 +346,7 @@ void ModbusTCP::parseResponse()
 		case ModbusTCP::mbFunc::READ_EXTRA_REGS:
 			response.countOfElement = (messLen - 3) / 2;
 			data.reserve(response.countOfElement / 2);
-			// Копируем данные, в лоб пока не стал, так как возможно понадобится переворачивать байты
+			// РљРѕРїРёСЂСѓРµРј РґР°РЅРЅС‹Рµ, РІ Р»РѕР± РїРѕРєР° РЅРµ СЃС‚Р°Р», С‚Р°Рє РєР°Рє РІРѕР·РјРѕР¶РЅРѕ РїРѕРЅР°РґРѕР±РёС‚СЃСЏ РїРµСЂРµРІРѕСЂР°С‡РёРІР°С‚СЊ Р±Р°Р№С‚С‹
 			for (int i = 0; i < response.countOfElement; i++) {
 				uint16_t val = (static_cast<uint16_t>(resp[9 + i*2]) << 8) + resp[10 + i*2];
 				data.emplace_back(val);
@@ -274,31 +363,51 @@ void ModbusTCP::parseResponse()
 			D1("receive unknown function");
 		}
 	}
+	return response;
 }
 
-// Ошибки
-void ModbusTCP::D1(const std::string text)
+//void ModbusTCP::startWatchDog() {
+//	reqMutex.lock();
+//	reqTime = std::chrono::system_clock::now();
+//	std::thread t([&] {
+//		auto old_rt = reqTime;
+//		// Р•СЃР»Рё РјРµС‚РєР° РІСЂРµРјРµРЅРё РёР·РјРµРЅРёР»Р°СЃСЊ, С‚Рѕ Р·РЅР°С‡РёС‚ РЅР°С‡Р°Р»СЃСЏ РЅРѕРІС‹Р№ Р·Р°РїСЂРѕСЃ, Р° Р·РЅР°С‡РёС‚ mutex СЂР°Р·Р±Р»РѕРєРёСЂРѕРІР°Р»СЃСЏ РїСЂРё РїСЂРёРµРјРµ РѕС‚РІРµС‚Р°!
+//		while (old_rt == reqTime) {
+//			auto curTime = std::chrono::system_clock::now();
+//			if (std::chrono::duration_cast<std::chrono::milliseconds>(curTime - reqTime).count() >= timeout) {
+//				D1("Request timeout\n");;
+//				reqMutex.unlock();
+//				break;
+//			}
+//			std::this_thread::sleep_for(20ms);
+//		}
+//	});
+//	t.detach();
+//}
+
+// РћС€РёР±РєРё
+void ModbusTCP::D1(const std::string text) const
 {
 	if (debugLevel >= 1)
 		std::cout << text;
 }
 
-// События
-void ModbusTCP::D2(const std::string text)
+// РЎРѕР±С‹С‚РёСЏ
+void ModbusTCP::D2(const std::string text) const
 {
 	if (debugLevel >= 2)
 		std::cout << text;
 }
 
-// Данные
+// Р”Р°РЅРЅС‹Рµ
 template<typename container>
-void ModbusTCP::D3(const std::string text, const container& data, size_t realLength)
+void ModbusTCP::D3(const std::string text, const container& data, size_t realLength) const
 {
 	if (debugLevel >= 3) {
 		size_t sz = realLength ? realLength : data.size();
 
 		std::cout << text << "(" << sz << "): ";
-		for (int i = 0; i < sz && i < 100; i++) {
+		for (size_t i = 0; i < sz && i < 100; i++) {
 			std::cout << std::hex << (int)data[i] << " ";
 			if (i == 99)
 				std::cout << "...";
@@ -372,11 +481,33 @@ std::string ModbusTCP::mbErrToString(errCode err) {
 	case ModbusTCP::errCode::GATEWAY_PROBLEMF:
 		return "GATEWAY_PROBLEMF";
 		break;
+	case ModbusTCP::errCode::TIMEOUT:
+		return "TIMEOUT";
+		break;
 	case ModbusTCP::errCode::BAD_DATA:
 		return "BAD_DATA";
 		break;
 	default:
 		return "UNKNOWN_ERROR";
 		break;
+	}
+}
+
+bool ModbusTCP::isValidFunc(const int func) {
+	switch (func)
+	{
+	case static_cast<int>(ModbusTCP::mbFunc::READ_COILS):
+	case static_cast<int>(ModbusTCP::mbFunc::READ_INPUT_BITS):
+	case static_cast<int>(ModbusTCP::mbFunc::READ_REGS):
+	case static_cast<int>(ModbusTCP::mbFunc::READ_INPUT_REGS):
+	case static_cast<int>(ModbusTCP::mbFunc::WRITE_COIL):
+	case static_cast<int>(ModbusTCP::mbFunc::WRITE_REG):
+	case static_cast<int>(ModbusTCP::mbFunc::WRITE_COILS):
+	case static_cast<int>(ModbusTCP::mbFunc::WRITE_REGS):
+	case static_cast<int>(ModbusTCP::mbFunc::READ_EXTRA_REGS):
+	case static_cast<int>(ModbusTCP::mbFunc::WRITE_EXTRA_REGS):
+		return true;
+	default:
+		return false;
 	}
 }

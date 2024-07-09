@@ -19,6 +19,7 @@
     #define OS_SOCKET_INVALID -1
     #define SD_BOTH SHUT_RDWR
     #define SOCKET_ERROR -1
+    #define sscanf_s sscanf
 #endif
 
 class Address {
@@ -30,7 +31,7 @@ public:
     Address(uint32_t addr, uint16_t port) : address(addr), port(port) { }
     Address(std::string addr, uint16_t port) : port(port){
         uint8_t a=0, b=0, c=0, d=0;
-        auto ret = sscanf_s(addr.c_str(), "%hhd.%hhd.%hhd.%hhd", &a, &b, &c, &d);
+        sscanf_s(addr.c_str(), "%hhd.%hhd.%hhd.%hhd", &a, &b, &c, &d);
         address = (a << 24) | (b << 16) | (c << 8) | d;
     }
     Address(const Address& A) : address(A.address), port(A.port) { }
@@ -71,7 +72,8 @@ public:
 
     // Принимает данные в buffer, увеличивает totalSize
     // Возвращает totalSize если изменился, 0 если ничего нового, код ошибки отрицательный
-    virtual int Receive() = 0;
+	// timeout используется только для блокирующего режима
+    virtual int Receive(uint32_t timeout = 1000) = 0;
     
     // Откуда пришли данные, либо куда отправить
     Address addr = Address();
@@ -94,6 +96,8 @@ protected:
     // Для автоматического определения когда нужно запускать InitializeSockets
     // socketNum еще используется для определения что InitializeSockets прошло корректно
     static int socketNum;
+	// Блокирующий режим
+	bool blockMode = false;
     // Сам сокет, он не зависит от TCP/UDP
     OS_socket_hndl socket = OS_SOCKET_INVALID;
 };

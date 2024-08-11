@@ -262,7 +262,8 @@ TCP_Socket* TCP_Socket::connectTo(Address addr, bool block)
 
     // Создание TCP сокета
     tcpCon->socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-    if (tcpCon->socket WIN(== INVALID_SOCKET) NIX(< 0)) return nullptr;
+    if (tcpCon->socket WIN(== INVALID_SOCKET) NIX(< 0))
+        return nullptr;
 
     new(&address) SocketAddr_in;
     address.sin_family = AF_INET;
@@ -274,6 +275,7 @@ TCP_Socket* TCP_Socket::connectTo(Address addr, bool block)
         WIN(== SOCKET_ERROR)NIX(!= 0)) 
     {
         WIN(closesocket)NIX(close)(tcpCon->socket);
+        tcpCon->socket = OS_SOCKET_INVALID; // Фцункция close не меняет значение переменной
         return nullptr;
     }
 

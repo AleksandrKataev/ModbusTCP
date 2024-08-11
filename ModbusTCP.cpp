@@ -7,11 +7,11 @@
 
 int ModbusTCP::connectToDevice(Address addr)
 {
-	D2(std::string("connectToDevice ") + addr.GetAddressString() + "\n");
+	D2(std::string("connectToDevice ") + addr.GetAddressString() + ":" +std::to_string(addr.GetPort()) +"\n");
 	
 	tcpConnect = TCP_Socket::connectTo(addr,true);
-	if (!tcpConnect) {
-		D1(std::string("Connection fault ") + addr.GetAddressString() + "\n");
+	if (!tcpConnect || !tcpConnect->isOpen()) {
+		D1(std::string("Connection fault ") + addr.GetAddressString() + ":" +std::to_string(addr.GetPort()) + "\n");
 		return -1;
 	}
 
@@ -49,7 +49,7 @@ bool ModbusTCP::readDataReq(const mbFunc func, const uint8_t devAddr, const uint
 		return false;
 	}
 
-	if (!tcpConnect) {
+	if (!isConnected()) {
 		D1("Error! Connection not possible");
 		return false;
 	}
@@ -172,54 +172,60 @@ int ModbusTCP::getResponse(mbResponse &response)
 	//}
 	response = lastReq;
 	
-	auto dataLen = tcpConnect->Receive(timeout);
-	if (dataLen < 0) {
-		if (dataLen == -2) {
-			D1("Request timeout\n");
+	// Принимаем до тех пор пока не пройдет таймаут, или не разорвет связь
+	// При оборванных пакетах догружаем данные
+	while(isConnected()){
+		auto dataLen = tcpConnect->Receive(timeout);
+		if (dataLen < 0) {
+			// При любом сбое перестаем ждать ответа
 			waitResponse = false;
-			response.errcode = errCode::TIMEOUT;
-			return 2;
+			if (dataLen == -2) {
+				D1("Request timeout\n");
+				response.errcode = errCode::TIMEOUT;
+				return 2;
+			}
+			else {
+				D1(std::string("Data receive error ") + std::to_string(dataLen) + "\n");
+				tcpConnect->Close();
+				return -1;
+			}
 		}
-		else {
-			D1(std::string("Data receive error ") + std::to_string(dataLen) + "\n");
-			tcpConnect->Close();
-			return -1;
+		if (dataLen >= 0 && tcpConnect->totalSize>6) {	// 6 минимальный размер пакета
+			if (tcpConnect->buffer[2] != 0 || tcpConnect->buffer[3] != 0) {
+				// Какая-то ерунда чистим буфер на всякий. 
+				D1(std::string("Receive incorrect packet"));
+				tcpConnect->totalSize = 0;
+			}
+
+			auto messId = (static_cast<uint16_t>(tcpConnect->buffer[0]) << 8) + static_cast<uint16_t>(tcpConnect->buffer[1]);
+			if (messId != lastReqId) {
+				// Идентификатор сообщения сломался, пропускаем сообщение
+				D1(std::string("Message ID is incorrect"));
+				tcpConnect->totalSize = 0;
+				continue;
+			}
+			
+			uint16_t messLen = (static_cast<uint16_t>(tcpConnect->buffer[4]) << 8) + static_cast<uint16_t>(tcpConnect->buffer[5]);
+			if (tcpConnect->totalSize >= (6 + messLen)) // Нужное количестов данных пришло
+			{ 
+				// Разрешаем следующий запрос
+				//reqMutex.unlock();
+
+				D3("Receive data", tcpConnect->buffer, 6 + messLen);
+
+				// Важно получить ответ до сброса waitResponse иначе новый запрос подменяет адрес и количество запрошенных данных
+				response = parseResponse();
+				if (response.func>mbFunc::UNKNOWN)
+					waitResponse = false;
+
+				// Нескольких сообщений не предполагается, поэтому чистим буфер
+				tcpConnect->totalSize = 0;
+				return 1;
+			}
 		}
 	}
-	if (dataLen >= 0 && tcpConnect->totalSize>6) {	// 6 минимальный размер пакета
-		if (tcpConnect->buffer[2] != 0 || tcpConnect->buffer[3] != 0) {
-			// Какая-то ерунда чистим буфер на всякий. 
-			D1(std::string("Receive incorrect packet"));
-			tcpConnect->totalSize = 0;
-		}
-
-		auto messId = (static_cast<uint16_t>(tcpConnect->buffer[0]) << 8) + static_cast<uint16_t>(tcpConnect->buffer[1]);
-		if (messId != lastReqId) {
-			// Идентификатор сообщения сломался, пропускаем сообщение
-			D1(std::string("Message ID is incorrect"));
-			tcpConnect->totalSize = 0;
-			return 0;
-		}
-		
-		uint16_t messLen = (static_cast<uint16_t>(tcpConnect->buffer[4]) << 8) + static_cast<uint16_t>(tcpConnect->buffer[5]);
-		if (tcpConnect->totalSize >= (6 + messLen)) // Нужное количестов данных пришло
-		{ 
-			// Разрешаем следующий запрос
-			//reqMutex.unlock();
-
-			D3("Receive data", tcpConnect->buffer, 6 + messLen);
-
-			// Важно получить ответ до сброса waitResponse иначе новый запрос подменяет адрес и количество запрошенных данных
-			response = parseResponse();
-			if (response.func>mbFunc::UNKNOWN)
-				waitResponse = false;
-
-			// Нескольких сообщений не предполагается, поэтому чистим буфер
-			tcpConnect->totalSize = 0;
-			return 1;
-		}
-	}
-	return 0;
+	// Если дошли до сюда, скорее всего обрыв связи.
+	return -1;
 }
 
 // Проверка связи

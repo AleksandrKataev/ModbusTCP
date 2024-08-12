@@ -2,11 +2,11 @@
 #include "iostream"
 #include <thread>
 
-// Запрос данных
+// Р—Р°РїСЂРѕСЃ РґР°РЅРЅС‹С…
 bool SendReq(ModbusTCP& mbDevice, const ModbusTCP::mbFunc func, const uint8_t devaddr, const uint16_t fitstReg, const uint16_t len);
-// Запись данных
+// Р—Р°РїРёСЃСЊ РґР°РЅРЅС‹С…
 bool SendWReq(ModbusTCP& mbDevice, const ModbusTCP::mbFunc func, const uint8_t devaddr, const uint16_t fitstReg, const std::vector<uint16_t>& data);
-// Пример получения ответа
+// РџСЂРёРјРµСЂ РїРѕР»СѓС‡РµРЅРёСЏ РѕС‚РІРµС‚Р°
 void ReceiveResponse(ModbusTCP&);
 
 int main(int argc, char* argv[]) 
@@ -20,7 +20,7 @@ int main(int argc, char* argv[])
 
 	ModbusTCP mbDevice;
 
-	// Включаем диагностические сообщения, с данными
+	// Р’РєР»СЋС‡Р°РµРј РґРёР°РіРЅРѕСЃС‚РёС‡РµСЃРєРёРµ СЃРѕРѕР±С‰РµРЅРёСЏ, СЃ РґР°РЅРЅС‹РјРё
 	mbDevice.debugLevel = 3;
 
 	auto ret = mbDevice.connectToDevice(addr);
@@ -29,7 +29,7 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 	
-	// Проверка чтения типов
+	// РџСЂРѕРІРµСЂРєР° С‡С‚РµРЅРёСЏ С‚РёРїРѕРІ
 	std::cout << "Type check" << std::endl;
 	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_COILS, 1, 0, 127))
 		ReceiveResponse(mbDevice);
@@ -43,7 +43,7 @@ int main(int argc, char* argv[])
 	if (SendReq(mbDevice, ModbusTCP::mbFunc::READ_INPUT_REGS, 1, 0, 123))
 		ReceiveResponse(mbDevice);
 	
-	// Тест на запись
+	// РўРµСЃС‚ РЅР° Р·Р°РїРёСЃСЊ
 	std::cout << "Write check" << std::endl;
 	std::vector<uint16_t> data;// = { 1,1,1,0,0,0,2,3,4,5 };
 	for (int i = 0; i < 1000; i++)
@@ -61,7 +61,7 @@ int main(int argc, char* argv[])
 	if (SendWReq(mbDevice, ModbusTCP::mbFunc::WRITE_REGS, 10, 200, data))
 		ReceiveResponse(mbDevice);
 
-	// Тест быстродействия вычитка 
+	// РўРµСЃС‚ Р±С‹СЃС‚СЂРѕРґРµР№СЃС‚РІРёСЏ РІС‹С‡РёС‚РєР° 
 	std::cout << "Perfomance test (send 500 req READ_REGS)" << std::endl;
 	auto start = time(nullptr);
 	for (int i = 0; i < 500; i++) {
